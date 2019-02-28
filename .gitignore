@@ -16,7 +16,6 @@
 *.out
 
 ### Go Patch ###
-/vendor/
 /Godeps/
 
 ### JetBrains+all ###
@@ -174,10 +173,7 @@ $RECYCLE.BIN/
 
 build/
 
-go.sum
+#go.sum
 # End of https://www.gitignore.io/api/go,linux,macos,windows,jetbrains+all,visualstudiocode
 
 coverage.txt
-
-# test data
-ledger/db/testdatabase/

@@ -28,10 +28,8 @@ type Service interface {
 	common.Service
 	Node() *QlcNode
 	MessageEvent() *EventQueue
-	Broadcast(messageName string, value interface{})
+	Broadcast(messageName string, value interface{}) error
 	SendMessageToPeer(messageName string, value interface{}, peerID string) error
-	//Broadcast message, except for the peerID in the parameter
-	SendMessageToPeers(messageName string, value interface{}, peerID string)
 }
 
 // Subscriber subscriber.

@@ -32,7 +32,7 @@ func TestQlcNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = node.startHost()
+	err = node.BuildHost()
 	if err != nil {
 		t.Fatal(err)
 	}

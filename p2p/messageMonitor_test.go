@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -66,10 +67,6 @@ func Test_MessageService_Stop(t *testing.T) {
 	if !ok {
 		t.Fatal("subscription BulkPushBlock messageType error")
 	}
-	_, ok = node.dispatcher.subscribersMap.Load(MessageType(MessageResponse))
-	if !ok {
-		t.Fatal("subscription MessageResponse messageType error")
-	}
 
 	node.msgService.Stop()
 	_, ok = node.dispatcher.subscribersMap.Load(PublishReq)
@@ -103,10 +100,6 @@ func Test_MessageService_Stop(t *testing.T) {
 	_, ok = node.dispatcher.subscribersMap.Load(BulkPushBlock)
 	if ok {
 		t.Fatal("subscription BulkPushBlock messageType error")
-	}
-	_, ok = node.dispatcher.subscribersMap.Load(MessageResponse)
-	if ok {
-		t.Fatal("subscription MessageResponse messageType error")
 	}
 
 	//remove test file
@@ -376,13 +369,6 @@ func Test_SendMessage(t *testing.T) {
 		t.Fatal("receive data error")
 	}
 
-	//test send message to peers
-	node1.SendMessageToPeers(PublishReq, blk, peerID)
-	time.Sleep(1 * time.Second)
-	if len(node2.msgService.publishMessageCh) != 0 {
-		t.Fatal("Send Message To Peers error")
-	}
-
 	//test broadcast message
 	node1.Broadcast(PublishReq, blk)
 	time.Sleep(1 * time.Second)
@@ -406,7 +392,7 @@ func Test_SendMessage(t *testing.T) {
 
 }
 
-func Test_MessageCache(t *testing.T) {
+func Test_BroadcastMessage(t *testing.T) {
 	//bootNode config
 	dir := filepath.Join(config.QlcTestDataDir(), "p2p", uuid.New().String())
 	cfgFile, _ := config.DefaultConfig(dir)
@@ -414,6 +400,7 @@ func Test_MessageCache(t *testing.T) {
 	cfgFile.P2P.Discovery.MDNSEnabled = false
 	cfgFile.P2P.BootNodes = []string{}
 	b := "/ip4/0.0.0.0/tcp/19743/ipfs/" + cfgFile.P2P.ID.PeerID
+	fmt.Println(cfgFile.P2P.ID.PeerID)
 
 	//start bootNode
 	node, err := NewQlcService(cfgFile)
@@ -465,23 +452,23 @@ func Test_MessageCache(t *testing.T) {
 	}
 
 	//node3 config
-	dir3 := filepath.Join(config.QlcTestDataDir(), "p2p", uuid.New().String())
-	cfgFile3, _ := config.DefaultConfig(dir3)
-	cfgFile3.P2P.Listen = "/ip4/0.0.0.0/tcp/19746"
-	cfgFile3.P2P.BootNodes = []string{b}
-	cfgFile3.P2P.Discovery.MDNSEnabled = false
-	cfgFile3.P2P.Discovery.DiscoveryInterval = 3
+	//dir3 := filepath.Join(config.QlcTestDataDir(), "p2p", uuid.New().String())
+	//cfgFile3, _ := config.DefaultConfig(dir3)
+	//cfgFile3.P2P.Listen = "/ip4/0.0.0.0/tcp/19746"
+	//cfgFile3.P2P.BootNodes = []string{b}
+	//cfgFile3.P2P.Discovery.MDNSEnabled = false
+	//cfgFile3.P2P.Discovery.DiscoveryInterval = 3
 
 	//start node2
-	node3, err := NewQlcService(cfgFile3)
-	err = node3.Init()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = node3.Start()
-	if err != nil {
-		t.Fatal(err)
-	}
+	//node3, err := NewQlcService(cfgFile3)
+	//err = node3.Init()
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
+	//err = node3.Start()
+	//if err != nil {
+	//	t.Fatal(err)
+	//}
 
 	//remove test file
 	defer func() {
@@ -497,10 +484,10 @@ func Test_MessageCache(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = node3.msgService.ledger.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
+		//err = node3.msgService.ledger.Close()
+		//if err != nil {
+		//	t.Fatal(err)
+		//}
 		err = node.Stop()
 		if err != nil {
 			t.Fatal(err)
@@ -513,10 +500,10 @@ func Test_MessageCache(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = node3.Stop()
-		if err != nil {
-			t.Fatal(err)
-		}
+		//err = node3.Stop()
+		//if err != nil {
+		//	t.Fatal(err)
+		//}
 		err = os.RemoveAll(config.QlcTestDataDir())
 		if err != nil {
 			t.Fatal(err)
@@ -534,53 +521,14 @@ func Test_MessageCache(t *testing.T) {
 		default:
 		}
 		counts = node1.node.streamManager.PeerCounts()
-		if counts == 2 {
+		if counts == 1 {
 			break
 		}
 	}
-
 	node2.msgService.Stop()
-	node3.msgService.Stop()
+	//	node3.msgService.Stop()
 	blk := mock.StateBlock()
 	//test send message to peers
 	node1.Broadcast(PublishReq, blk)
-	time.Sleep(1 * time.Second)
-
-	msg := <-node2.msgService.publishMessageCh
-
-	//test message cache
-	if node1.msgService.cache.Len() != 1 {
-		t.Fatal("message cache error")
-	}
-
-	if !node1.msgService.cache.Has(msg.Hash()) {
-		t.Fatal("message cache key error")
-	}
-	v, err := node1.msgService.cache.Get(msg.Hash())
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := v.([]*cacheValue)
-
-	if len(c) != 2 {
-		t.Fatal("message cache value lens error")
-	}
-
-	if c[0].peerID != node2.node.ID.Pretty() && c[1].peerID != node2.node.ID.Pretty() {
-		t.Fatal("message cache peer ID error")
-	}
-	if c[0].resendTimes != 0 || c[1].resendTimes != 0 {
-		t.Fatal("message cache resendTimes error")
-	}
 	time.Sleep(10 * time.Second)
-	node1.msgService.checkMessageCache()
-	if c[0].resendTimes != 1 || c[1].resendTimes != 1 {
-		t.Fatal("message cache resendTimes error")
-	}
-	for i := 0; i < 20; i++ {
-		node1.msgService.checkMessageCache()
-	}
-	if node1.msgService.cache.Has(msg.Hash()) {
-		t.Fatal("resendTimes error")
-	}
 }

@@ -11,9 +11,9 @@ import (
 	"go.uber.org/zap"
 
 	u "github.com/ipfs/go-ipfs-util"
-	host "github.com/libp2p/go-libp2p-host"
+	"github.com/libp2p/go-libp2p-host"
 	inet "github.com/libp2p/go-libp2p-net"
-	peer "github.com/libp2p/go-libp2p-peer"
+	"github.com/libp2p/go-libp2p-peer"
 )
 
 const (

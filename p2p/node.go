@@ -5,17 +5,20 @@ import (
 	"errors"
 	"time"
 
+	"github.com/qlcchain/go-qlc/p2p/pubsub"
+
 	"github.com/qlcchain/go-qlc/log"
 	"go.uber.org/zap"
 
 	"github.com/libp2p/go-libp2p"
-	crypto "github.com/libp2p/go-libp2p-crypto"
-	discovery "github.com/libp2p/go-libp2p-discovery"
-	host "github.com/libp2p/go-libp2p-host"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p-crypto"
+	"github.com/libp2p/go-libp2p-discovery"
+	"github.com/libp2p/go-libp2p-host"
+	"github.com/libp2p/go-libp2p-kad-dht"
 	inet "github.com/libp2p/go-libp2p-net"
-	peer "github.com/libp2p/go-libp2p-peer"
+	"github.com/libp2p/go-libp2p-peer"
 	pstore "github.com/libp2p/go-libp2p-peerstore"
+	libp2pps "github.com/libp2p/go-libp2p-pubsub"
 	localdiscovery "github.com/libp2p/go-libp2p/p2p/discovery"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/qlcchain/go-qlc/config"
@@ -29,7 +32,12 @@ var (
 // p2p protocol version
 var p2pVersion = 4
 
-//var logger = log.NewLogger("p2p")
+const (
+	// Topic is the network pubsub topic identifier on which new messages are announced.
+	MsgTopic = "/qlc/msgs"
+	// BlockTopic is the pubsub topic identifier on which new blocks are announced.
+	BlockTopic = "/qlc/blocks"
+)
 
 type QlcNode struct {
 	ID                  peer.ID
@@ -47,6 +55,9 @@ type QlcNode struct {
 	netService          *QlcService
 	logger              *zap.SugaredLogger
 	quitPeerDiscoveryCh chan bool
+	publisher           *pubsub.Publisher
+	subscriber          *pubsub.Subscriber
+	MessageSub          pubsub.Subscription
 }
 
 // NewNode return new QlcNode according to the config.
@@ -73,8 +84,7 @@ func NewNode(config *config.Config) (*QlcNode, error) {
 	return node, nil
 }
 
-func (node *QlcNode) startHost() error {
-	node.logger.Info("Start Qlc Host...")
+func (node *QlcNode) BuildHost() error {
 	sourceMultiAddr, _ := ma.NewMultiaddr(node.cfg.P2P.Listen)
 	qlcHost, err := libp2p.New(
 		node.ctx,
@@ -97,6 +107,13 @@ func (node *QlcNode) startHost() error {
 	node.peerStore = qlcHost.Peerstore()
 	node.peerStore.AddPrivKey(node.ID, node.privateKey)
 	node.peerStore.AddPubKey(node.ID, node.privateKey.GetPublic())
+	// Set up libp2p pubsub
+	fsub, err := libp2pps.NewGossipSub(node.ctx, qlcHost)
+	if err != nil {
+		return errors.New("failed to set up pubsub")
+	}
+	node.publisher = pubsub.NewPublisher(fsub)
+	node.subscriber = pubsub.NewSubscriber(fsub)
 	return nil
 }
 
@@ -120,11 +137,20 @@ func (node *QlcNode) startLocalDiscovery() error {
 func (node *QlcNode) StartServices() error {
 
 	if node.host == nil {
-		err := node.startHost()
+		err := node.BuildHost()
 		if err != nil {
 			return err
 		}
 	}
+
+	// subscribe to message notifications
+	msgSub, err := node.subscriber.Subscribe(MsgTopic)
+	if err != nil {
+		return errors.New("failed to subscribe to message topic")
+	}
+	node.MessageSub = msgSub
+
+	go node.handleSubscription(node.ctx, node.processMessage, "processMessage", node.MessageSub, "MessageSub")
 
 	if node.localDiscovery == nil {
 		err := node.startLocalDiscovery()
@@ -246,17 +272,13 @@ func (node *QlcNode) Stop() {
 	node.logger.Info("Stop QlcService Node...")
 	node.stopHost()
 	node.stopPeerDiscovery()
+	node.MessageSub.Cancel()
 }
 
 // BroadcastMessage broadcast message.
-func (node *QlcNode) BroadcastMessage(messageName string, value interface{}) {
+func (node *QlcNode) BroadcastMessage(messageName string, value interface{}) error {
 
-	node.streamManager.BroadcastMessage(messageName, value)
-}
-
-// BroadcastMessage broadcast message.
-func (node *QlcNode) SendMessageToPeers(messageName string, value interface{}, peerID string) {
-	node.streamManager.SendMessageToPeers(messageName, value, peerID)
+	return node.streamManager.BroadcastMessage(messageName, value)
 }
 
 // SendMessageToPeer send message to a peer.
@@ -272,3 +294,51 @@ func (node *QlcNode) SendMessageToPeer(messageName string, value interface{}, pe
 	}
 	return stream.SendMessageToPeer(messageName, data)
 }
+
+func (node *QlcNode) handleSubscription(ctx context.Context, f pubSubProcessorFunc, fname string, s pubsub.Subscription, sname string) {
+	for {
+		pubSubMsg, err := s.Next(ctx)
+		if err != nil {
+			node.logger.Debugf("%s.Next(): %s", sname, err)
+			return
+		}
+
+		if err := f(ctx, pubSubMsg); err != nil {
+			if err != context.Canceled {
+				node.logger.Errorf("%s(): %s", fname, err)
+			}
+		}
+	}
+}
+
+func (node *QlcNode) processMessage(ctx context.Context, pubSubMsg pubsub.Message) error {
+	var message *QlcMessage
+	var err error
+	data := pubSubMsg.GetData()
+	peerID := pubSubMsg.GetFrom().Pretty()
+	if peerID == node.ID.Pretty() {
+		return nil
+	}
+	node.logger.Infof("node [%s] receive topic from [%s]", node.ID.Pretty(), peerID)
+	message, err = ParseQlcMessage(data)
+	if err != nil {
+		return err
+	}
+	messageBuffer := data[QlcMessageHeaderLength:]
+	if len(messageBuffer) < int(message.DataLength()) {
+		return errors.New("data length error")
+	}
+	if err := message.ParseMessageData(messageBuffer); err != nil {
+		return err
+	}
+
+	if message.Version() < byte(p2pVersion) {
+		node.logger.Debugf("message Version [%d] is less then p2pVersion [%d]", message.Version(), p2pVersion)
+		return errors.New("P2P protocol version is low")
+	}
+	m := NewBaseMessage(message.MessageType(), peerID, message.MessageData(), message.content)
+	node.netService.PutMessage(m)
+	return nil
+}
+
+type pubSubProcessorFunc func(ctx context.Context, msg pubsub.Message) error

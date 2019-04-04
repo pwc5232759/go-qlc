@@ -4,7 +4,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bluele/gcache"
 	"github.com/qlcchain/go-qlc/common/types"
 	"github.com/qlcchain/go-qlc/ledger"
 	"github.com/qlcchain/go-qlc/p2p/protos"
@@ -20,23 +19,7 @@ const (
 	BulkPullRequest = "5" //BulkPullRequest
 	BulkPullRsp     = "6" //BulkPullRsp
 	BulkPushBlock   = "7" //BulkPushBlock
-	MessageResponse = "8" //MessageResponse
 )
-
-const (
-	msgCacheSize           = 65535
-	checkCacheTimeInterval = 30 * time.Second
-	msgResendMaxTimes      = 10
-	msgNeedResendInterval  = 10 * time.Second
-)
-
-type cacheValue struct {
-	peerID      string
-	resendTimes uint32
-	startTime   time.Time
-	data        []byte
-	t           string
-}
 
 type MessageService struct {
 	netService          *QlcService
@@ -48,7 +31,6 @@ type MessageService struct {
 	rspMessageCh        chan Message
 	ledger              *ledger.Ledger
 	syncService         *ServiceSync
-	cache               gcache.Cache
 }
 
 // NewService return new Service.
@@ -62,7 +44,6 @@ func NewMessageService(netService *QlcService, ledger *ledger.Ledger) *MessageSe
 		rspMessageCh:        make(chan Message, 65535),
 		ledger:              ledger,
 		netService:          netService,
-		cache:               gcache.New(msgCacheSize).LRU().Build(),
 	}
 	ms.syncService = NewSyncService(netService, ledger)
 	return ms
@@ -80,12 +61,9 @@ func (ms *MessageService) Start() {
 	netService.Register(NewSubscriber(ms, ms.messageCh, false, BulkPullRequest))
 	netService.Register(NewSubscriber(ms, ms.messageCh, false, BulkPullRsp))
 	netService.Register(NewSubscriber(ms, ms.messageCh, false, BulkPushBlock))
-	netService.Register(NewSubscriber(ms, ms.rspMessageCh, false, MessageResponse))
 	// start loop().
 	go ms.startLoop()
 	go ms.syncService.Start()
-	go ms.checkMessageCacheLoop()
-	go ms.messageResponseLoop()
 	go ms.publishReqLoop()
 	go ms.confirmReqLoop()
 	go ms.confirmAckLoop()
@@ -113,24 +91,6 @@ func (ms *MessageService) startLoop() {
 				ms.syncService.onBulkPushBlock(message)
 			default:
 				ms.netService.node.logger.Error("Received unknown message.")
-				time.Sleep(5 * time.Millisecond)
-			}
-		default:
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-}
-
-func (ms *MessageService) messageResponseLoop() {
-	for {
-		select {
-		case <-ms.quitCh:
-			return
-		case message := <-ms.rspMessageCh:
-			switch message.MessageType() {
-			case MessageResponse:
-				ms.onMessageResponse(message)
-			default:
 				time.Sleep(5 * time.Millisecond)
 			}
 		default:
@@ -193,106 +153,6 @@ func (ms *MessageService) confirmAckLoop() {
 	}
 }
 
-func (ms *MessageService) checkMessageCacheLoop() {
-	ticker := time.NewTicker(checkCacheTimeInterval)
-	for {
-		select {
-		case <-ms.quitCh:
-			return
-		case <-ticker.C:
-			ms.checkMessageCache()
-		default:
-			time.Sleep(5 * time.Millisecond)
-		}
-	}
-}
-
-func (ms *MessageService) checkMessageCache() {
-	var cs []*cacheValue
-	var csTemp []*cacheValue
-	var hash types.Hash
-	m := ms.cache.GetALL()
-	for k, v := range m {
-		hash = k.(types.Hash)
-		cs = v.([]*cacheValue)
-		for i, value := range cs {
-			if value.resendTimes > msgResendMaxTimes {
-				csTemp = append(csTemp, cs[i])
-				continue
-			}
-			if time.Now().Sub(value.startTime) < msgNeedResendInterval {
-				continue
-			}
-			stream := ms.netService.node.streamManager.FindByPeerID(value.peerID)
-			if stream == nil {
-				ms.netService.node.logger.Debug("Failed to locate peer's stream,maybe lost connect")
-				//csTemp = append(csTemp, cs[i])
-				value.resendTimes++
-				continue
-			}
-			stream.messageChan <- value.data
-			value.resendTimes++
-			if value.resendTimes > msgResendMaxTimes {
-				csTemp = append(csTemp, cs[i])
-				continue
-			}
-		}
-
-		if len(csTemp) == len(cs) {
-			t := ms.cache.Remove(hash)
-			if t {
-				ms.netService.node.logger.Debugf("remove message:[%s] success", hash.String())
-			}
-		} else {
-			csDiff := sliceDiff(cs, csTemp)
-			err := ms.cache.Set(hash, csDiff)
-			if err != nil {
-				ms.netService.node.logger.Error(err)
-			}
-		}
-	}
-}
-
-func (ms *MessageService) onMessageResponse(message Message) {
-	//ms.netService.node.logger.Info("receive MessageResponse")
-	var hash types.Hash
-	var cs []*cacheValue
-	var csTemp []*cacheValue
-	err := hash.UnmarshalText(message.Data())
-	if err != nil {
-		ms.netService.node.logger.Errorf("onMessageResponse err:[%s]", err)
-		return
-	}
-	v, err := ms.cache.Get(hash)
-	if err != nil {
-		if err == gcache.KeyNotFoundError {
-			ms.netService.node.logger.Debugf("this hash:[%s] is not in cache", hash)
-		} else {
-			ms.netService.node.logger.Errorf("Get cache err:[%s] for hash:[%s]", err, hash)
-		}
-		return
-	}
-	cs = v.([]*cacheValue)
-	for k, v := range cs {
-		if v.peerID == message.MessageFrom() {
-			csTemp = append(csTemp, cs[k])
-		}
-	}
-
-	if len(csTemp) == len(cs) {
-		t := ms.cache.Remove(hash)
-		if t {
-			ms.netService.node.logger.Debugf("remove message cache for hash:[%s] success", hash)
-		}
-	} else {
-		csDiff := sliceDiff(cs, csTemp)
-		err := ms.cache.Set(hash, csDiff)
-		if err != nil {
-			ms.netService.node.logger.Error(err)
-		}
-	}
-}
-
 func (ms *MessageService) onPublishReq(message Message) {
 	if ms.netService.node.cfg.PerformanceEnabled {
 		blk, err := protos.PublishBlockFromProto(message.Data())
@@ -303,11 +163,7 @@ func (ms *MessageService) onPublishReq(message Message) {
 		hash := blk.Blk.GetHash()
 		ms.addPerformanceTime(hash)
 	}
-	err := ms.netService.SendMessageToPeer(MessageResponse, message.Hash(), message.MessageFrom())
-	if err != nil {
-		ms.netService.node.logger.Errorf("send Publish Response err:[%s] for message hash:[%s]", err, message.Hash().String())
-	}
-
+	ms.netService.node.logger.Infof("receive publish message")
 	ms.netService.msgEvent.GetEvent("consensus").Notify(EventPublish, message)
 }
 
@@ -320,10 +176,6 @@ func (ms *MessageService) onConfirmReq(message Message) {
 		}
 		hash := blk.Blk.GetHash()
 		ms.addPerformanceTime(hash)
-	}
-	err := ms.netService.SendMessageToPeer(MessageResponse, message.Hash(), message.MessageFrom())
-	if err != nil {
-		ms.netService.node.logger.Errorf("send ConfirmReq Response err:[%s] for message hash:[%s]", err, message.Hash().String())
 	}
 
 	ms.netService.msgEvent.GetEvent("consensus").Notify(EventConfirmReq, message)
@@ -338,10 +190,6 @@ func (ms *MessageService) onConfirmAck(message Message) {
 		}
 		ms.addPerformanceTime(ack.Blk.GetHash())
 	}
-	err := ms.netService.SendMessageToPeer(MessageResponse, message.Hash(), message.MessageFrom())
-	if err != nil {
-		ms.netService.node.logger.Errorf("send ConfirmAck Response err:[%s] for message hash:[%s]", err, message.Hash().String())
-	}
 
 	ms.netService.msgEvent.GetEvent("consensus").Notify(EventConfirmAck, message)
 }
@@ -349,7 +197,7 @@ func (ms *MessageService) onConfirmAck(message Message) {
 func (ms *MessageService) Stop() {
 	//ms.netService.node.logger.Info("stopped message monitor")
 	// quit.
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 5; i++ {
 		ms.quitCh <- true
 	}
 	ms.syncService.quitCh <- true
@@ -361,7 +209,6 @@ func (ms *MessageService) Stop() {
 	ms.netService.Deregister(NewSubscriber(ms, ms.messageCh, false, BulkPullRequest))
 	ms.netService.Deregister(NewSubscriber(ms, ms.messageCh, false, BulkPullRsp))
 	ms.netService.Deregister(NewSubscriber(ms, ms.messageCh, false, BulkPushBlock))
-	ms.netService.Deregister(NewSubscriber(ms, ms.rspMessageCh, false, MessageResponse))
 }
 
 func marshalMessage(messageName string, value interface{}) ([]byte, error) {
@@ -427,10 +274,6 @@ func marshalMessage(messageName string, value interface{}) ([]byte, error) {
 			return nil, err
 		}
 		return data, nil
-	case MessageResponse:
-		hash := value.(types.Hash)
-		data, _ := hash.MarshalText()
-		return data, nil
 	default:
 		return nil, errors.New("unKnown Message Type")
 	}
@@ -452,24 +295,4 @@ func (ms *MessageService) addPerformanceTime(hash types.Hash) {
 			}
 		}
 	}
-}
-
-// InSliceIface checks given interface in interface slice.
-func inSliceIface(v interface{}, sl []*cacheValue) bool {
-	for _, vv := range sl {
-		if vv == v {
-			return true
-		}
-	}
-	return false
-}
-
-// SliceDiff returns diff slice of slice1 - slice2.
-func sliceDiff(slice1, slice2 []*cacheValue) (diffslice []*cacheValue) {
-	for _, v := range slice1 {
-		if !inSliceIface(v, slice2) {
-			diffslice = append(diffslice, v)
-		}
-	}
-	return
 }

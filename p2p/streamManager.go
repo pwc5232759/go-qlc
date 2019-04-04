@@ -6,8 +6,7 @@ import (
 	"time"
 
 	libnet "github.com/libp2p/go-libp2p-net"
-	peer "github.com/libp2p/go-libp2p-peer"
-	"github.com/qlcchain/go-qlc/common/types"
+	"github.com/libp2p/go-libp2p-peer"
 )
 
 // StreamManager manages all streams
@@ -125,133 +124,25 @@ func (sm *StreamManager) createStreamWithPeer(pid peer.ID) {
 }
 
 // BroadcastMessage broadcast the message
-func (sm *StreamManager) BroadcastMessage(messageName string, v interface{}) {
-	var cs []*cacheValue
-	var c *cacheValue
+func (sm *StreamManager) BroadcastMessage(messageName string, v interface{}) error {
+	//	var cs []*cacheValue
+	//	var c *cacheValue
 	messageContent, err := marshalMessage(messageName, v)
 	if err != nil {
 		sm.node.logger.Error(err)
-		return
+		return err
 	}
 	version := p2pVersion
 	message := NewQlcMessage(messageContent, byte(version), messageName)
-	hash, err := types.HashBytes(message)
+	err = sm.node.publisher.Publish(MsgTopic, message)
 	if err != nil {
-		sm.node.logger.Error(err)
-		return
+		return err
 	}
-	sm.allStreams.Range(func(key, value interface{}) bool {
-		stream := value.(*Stream)
-		stream.messageChan <- message
-		if messageName == PublishReq || messageName == ConfirmReq || messageName == ConfirmAck {
-			exitCache, err := sm.node.netService.msgService.cache.Get(hash)
-			if err == nil {
-				cs = exitCache.([]*cacheValue)
-				for k, v := range cs {
-					if v.peerID == stream.pid.Pretty() {
-						v.resendTimes++
-						break
-					}
-					if k == (len(cs) - 1) {
-						c = &cacheValue{
-							peerID:      stream.pid.Pretty(),
-							resendTimes: 0,
-							startTime:   time.Now(),
-							data:        message,
-							t:           messageName,
-						}
-						cs = append(cs, c)
-						err = sm.node.netService.msgService.cache.Set(hash, cs)
-						if err != nil {
-							sm.node.logger.Error(err)
-						}
-					}
-				}
-			} else {
-				c = &cacheValue{
-					peerID:      stream.pid.Pretty(),
-					resendTimes: 0,
-					startTime:   time.Now(),
-					data:        message,
-					t:           messageName,
-				}
-				cs = append(cs, c)
-				err = sm.node.netService.msgService.cache.Set(hash, cs)
-				if err != nil {
-					sm.node.logger.Error(err)
-				}
-			}
-		}
-		return true
-	})
-}
-
-func (sm *StreamManager) SendMessageToPeers(messageName string, v interface{}, peerID string) {
-	var cs []*cacheValue
-	var c *cacheValue
-	messageContent, err := marshalMessage(messageName, v)
-	if err != nil {
-		sm.node.logger.Error(err)
-		return
-	}
-	version := p2pVersion
-	message := NewQlcMessage(messageContent, byte(version), messageName)
-	hash, err := types.HashBytes(message)
-	if err != nil {
-		sm.node.logger.Error(err)
-		return
-	}
-	sm.allStreams.Range(func(key, value interface{}) bool {
-		stream := value.(*Stream)
-		if stream.pid.Pretty() != peerID {
-			stream.messageChan <- message
-			if messageName == PublishReq || messageName == ConfirmReq || messageName == ConfirmAck {
-				exitCache, err := sm.node.netService.msgService.cache.Get(hash)
-				if err == nil {
-					cs = exitCache.([]*cacheValue)
-					for k, v := range cs {
-						if v.peerID == stream.pid.Pretty() {
-							v.resendTimes++
-							break
-						}
-						if k == (len(cs) - 1) {
-							c = &cacheValue{
-								peerID:      stream.pid.Pretty(),
-								resendTimes: 0,
-								startTime:   time.Now(),
-								data:        message,
-								t:           messageName,
-							}
-							cs = append(cs, c)
-							err = sm.node.netService.msgService.cache.Set(hash, cs)
-							if err != nil {
-								sm.node.logger.Error(err)
-							}
-						}
-					}
-				} else {
-					c = &cacheValue{
-						peerID:      stream.pid.Pretty(),
-						resendTimes: 0,
-						startTime:   time.Now(),
-						data:        message,
-						t:           messageName,
-					}
-					cs = append(cs, c)
-					err = sm.node.netService.msgService.cache.Set(hash, cs)
-					if err != nil {
-						sm.node.logger.Error(err)
-					}
-				}
-			}
-		}
-		return true
-	})
+	return nil
 }
 
 func (sm *StreamManager) PeerCounts() int {
 	allPeers := make(PeersSlice, 0)
-
 	sm.allStreams.Range(func(key, value interface{}) bool {
 		stream := value.(*Stream)
 		if stream.IsConnected() {

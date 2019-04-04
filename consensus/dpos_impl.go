@@ -4,7 +4,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bluele/gcache"
 	"github.com/qlcchain/go-qlc/common/types"
 	"github.com/qlcchain/go-qlc/config"
 	"github.com/qlcchain/go-qlc/ledger"
@@ -16,7 +15,6 @@ import (
 )
 
 const (
-	msgCacheSize                      = 65536
 	msgCacheExpirationTime            = 15 * time.Minute
 	findOnlineRepresentativesInterval = 2 * time.Minute
 	repTimeout                        = 5 * time.Minute
@@ -36,7 +34,6 @@ type DPoS struct {
 	accounts   []*types.Account
 	onlineReps sync.Map
 	logger     *zap.SugaredLogger
-	cache      gcache.Cache
 	cfg        *config.Config
 }
 
@@ -103,7 +100,6 @@ func NewDPoS(cfg *config.Config, netService p2p.Service, accounts []*types.Accou
 		acTrx:    acTrx,
 		accounts: accounts,
 		logger:   log.NewLogger("consensus"),
-		cache:    gcache.New(msgCacheSize).LRU().Expiration(msgCacheExpirationTime).Build(),
 		cfg:      cfg,
 	}
 	dps.bp.SetDpos(dps)
@@ -135,17 +131,6 @@ func (dps *DPoS) ReceivePublish(v interface{}) {
 	}
 	dps.logger.Infof("Publish Event for block:[%s] from [%s]", p.Blk.GetHash(), e.MessageFrom())
 	dps.bp.blocks <- bs
-	dps.onReceivePublish(e, p.Blk)
-}
-
-func (dps *DPoS) onReceivePublish(e p2p.Message, blk *types.StateBlock) {
-	if !dps.cache.Has(e.Hash()) {
-		dps.ns.SendMessageToPeers(p2p.PublishReq, blk, e.MessageFrom())
-		err := dps.cache.Set(e.Hash(), "")
-		if err != nil {
-			dps.logger.Errorf("Set cache error [%s] for block [%s] with publish message", err, blk.GetHash())
-		}
-	}
 }
 
 func (dps *DPoS) ReceiveConfirmReq(v interface{}) {
@@ -160,37 +145,41 @@ func (dps *DPoS) ReceiveConfirmReq(v interface{}) {
 }
 
 func (dps *DPoS) onReceiveConfirmReq(e p2p.Message, blk *types.StateBlock) {
-	var address types.Address
-	var count uint32
+	//var address types.Address
+	//var count uint32
 	bs := blockSource{
 		block:     blk,
 		blockFrom: types.UnSynchronized,
 	}
-	if !dps.cache.Has(e.Hash()) {
-		localRepAccount.Range(func(key, value interface{}) bool {
-			count++
-			address = key.(types.Address)
-			dps.saveOnlineRep(address)
-			result, _ := dps.verifier.Process(bs.block)
-			if result == process.Old {
-				err := dps.sendAckIfResultIsOld(bs.block, address, value.(*types.Account))
-				if err != nil {
-					return true
-				}
-			} else {
-				dps.bp.processResult(result, bs)
-			}
-			return true
-		})
-		if count == 0 {
-			dps.bp.blocks <- bs
-			dps.ns.SendMessageToPeers(p2p.ConfirmReq, blk, e.MessageFrom())
-			err := dps.cache.Set(e.Hash(), "")
-			if err != nil {
-				dps.logger.Errorf("Set cache error [%s] for block [%s] with confirmReq message", err, blk.GetHash())
-			}
-		}
-	}
+	dps.bp.blocks <- bs
+	//	if !dps.cache.Has(e.Hash()) {
+	//		localRepAccount.Range(func(key, value interface{}) bool {
+	//			count++
+	//			address = key.(types.Address)
+	//			dps.saveOnlineRep(address)
+	//			result, _ := dps.verifier.Process(bs.block)
+	//			if result == process.Old {
+	//				err := dps.sendAckIfResultIsOld(bs.block, address, value.(*types.Account))
+	//				if err != nil {
+	//					return true
+	//				}
+	//			} else {
+	//				dps.bp.processResult(result, bs)
+	//			}
+	//			return true
+	//		})
+	//	if count == 0 {
+	//		dps.bp.blocks <- bs
+	//	}
+	//if count == 0 {
+	//	dps.bp.blocks <- bs
+	//	dps.ns.SendMessageToPeers(p2p.ConfirmReq, blk, e.MessageFrom())
+	//	err := dps.cache.Set(e.Hash(), "")
+	//	if err != nil {
+	//		dps.logger.Errorf("Set cache error [%s] for block [%s] with confirmReq message", err, blk.GetHash())
+	//	}
+	//}
+	//	}
 }
 
 func (dps *DPoS) ReceiveConfirmAck(v interface{}) {
@@ -205,8 +194,8 @@ func (dps *DPoS) ReceiveConfirmAck(v interface{}) {
 }
 
 func (dps *DPoS) onReceiveConfirmAck(e p2p.Message, ack *protos.ConfirmAckBlock) {
-	var address types.Address
-	var count uint32
+	//	var address types.Address
+	//	var count uint32
 	bs := blockSource{
 		block:     ack.Blk,
 		blockFrom: types.UnSynchronized,
@@ -216,36 +205,38 @@ func (dps *DPoS) onReceiveConfirmAck(e p2p.Message, ack *protos.ConfirmAckBlock)
 		return
 	}
 	dps.acTrx.vote(ack)
-	if !dps.cache.Has(e.Hash()) {
-		dps.saveOnlineRep(ack.Account)
-		localRepAccount.Range(func(key, value interface{}) bool {
-			count++
-			address = key.(types.Address)
-			dps.saveOnlineRep(address)
-			result, _ := dps.verifier.Process(bs.block)
-			if result == process.Old {
-				err := dps.sendAckIfResultIsOld(bs.block, address, value.(*types.Account))
-				if err != nil {
-					return true
-				}
-			} else {
-				dps.bp.processResult(result, bs)
-			}
-			if result == process.Progress {
-				dps.acTrx.vote(ack)
-			}
-			return true
-		})
-		if count == 0 {
-			dps.bp.blocks <- bs
-		}
+	dps.saveOnlineRep(ack.Account)
+	dps.bp.blocks <- bs
+	//	if !dps.cache.Has(e.Hash()) {
+	//		dps.saveOnlineRep(ack.Account)
+	//		localRepAccount.Range(func(key, value interface{}) bool {
+	//			count++
+	//			address = key.(types.Address)
+	//			dps.saveOnlineRep(address)
+	//			result, _ := dps.verifier.Process(bs.block)
+	//			if result == process.Old {
+	//				err := dps.sendAckIfResultIsOld(bs.block, address, value.(*types.Account))
+	//				if err != nil {
+	//					return true
+	//				}
+	//			} else {
+	//				dps.bp.processResult(result, bs)
+	//			}
+	//			if result == process.Progress {
+	//				dps.acTrx.vote(ack)
+	//			}
+	//			return true
+	//		})
+	//		if count == 0 {
+	//			dps.bp.blocks <- bs
+	//		}
 
-		dps.ns.SendMessageToPeers(p2p.ConfirmAck, ack, e.MessageFrom())
-		err := dps.cache.Set(e.Hash(), "")
-		if err != nil {
-			dps.logger.Errorf("Set cache error [%s] for block [%s] with confirmAck message", err, ack.Blk.GetHash())
-		}
-	}
+	//dps.ns.SendMessageToPeers(p2p.ConfirmAck, ack, e.MessageFrom())
+	//err := dps.cache.Set(e.Hash(), "")
+	//if err != nil {
+	//	dps.logger.Errorf("Set cache error [%s] for block [%s] with confirmAck message", err, ack.Blk.GetHash())
+	//}
+	//	}
 }
 
 func (dps *DPoS) ReceiveSyncBlock(v interface{}) {
@@ -337,18 +328,18 @@ func (dps *DPoS) sendAckIfResultIsOld(block *types.StateBlock, account types.Add
 	if err != nil {
 		return err
 	}
-	msgHash, err := dps.calculateAckHash(va)
-	if err != nil {
-		return err
-	}
-	if !dps.cache.Has(msgHash) {
-		dps.logger.Infof("send confirm ack for hash %s,previous hash is %s", block.GetHash(), block.Parent())
-		dps.ns.Broadcast(p2p.ConfirmAck, va)
-		err := dps.cache.Set(msgHash, "")
-		if err != nil {
-			return err
-		}
-	}
+	//msgHash, err := dps.calculateAckHash(va)
+	//if err != nil {
+	//	return err
+	//}
+	//	if !dps.cache.Has(msgHash) {
+	dps.logger.Infof("send confirm ack for hash %s,previous hash is %s", block.GetHash(), block.Parent())
+	dps.ns.Broadcast(p2p.ConfirmAck, va)
+	//err := dps.cache.Set(msgHash, "")
+	//if err != nil {
+	//	return err
+	//}
+	//	}
 	return nil
 }
 

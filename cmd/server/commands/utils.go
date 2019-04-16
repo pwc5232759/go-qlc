@@ -65,7 +65,7 @@ func initNode(accounts []*types.Account, cfg *config.Config) error {
 	}
 
 	//ctx.DPosService = ss.NewDPosService(cfg, ctx.NetService, account, password)
-	dPosService = ss.NewDPosService(cfg, accounts, eventBus)
+	dPosService = ss.NewConsensusService(cfg, accounts, eventBus)
 	if rPCService, err = ss.NewRPCService(cfg, eventBus); err != nil {
 		return err
 	}

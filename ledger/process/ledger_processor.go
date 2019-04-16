@@ -53,7 +53,7 @@ func (lv *LedgerVerifier) Process(block types.Block) (ProcessResult, error) {
 		return r, err
 	}
 	if err := lv.BlockProcess(block); err != nil {
-		return Other, err
+		return Other, nil
 	}
 	return Progress, nil
 }
@@ -85,7 +85,7 @@ func checkStateBlock(lv *LedgerVerifier, block *types.StateBlock) (ProcessResult
 	lv.logger.Debug("check block ", hash)
 
 	if !block.IsValid() {
-		return BadWork, nil
+		return BadWork, errors.New("bad work")
 	}
 
 	blockExist, err := lv.l.HasStateBlock(hash)
@@ -99,7 +99,7 @@ func checkStateBlock(lv *LedgerVerifier, block *types.StateBlock) (ProcessResult
 
 	signature := block.GetSignature()
 	if !address.Verify(hash[:], signature[:]) {
-		return BadSignature, nil
+		return BadSignature, errors.New("bad signature")
 	}
 
 	return Progress, nil

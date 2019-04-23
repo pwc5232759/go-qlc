@@ -53,14 +53,14 @@ var (
 	cfgPath    commands.Flag
 	isProfile  commands.Flag
 
-	//ctx            *chain.QlcContext
-	ledgerService  *ss.LedgerService
-	walletService  *ss.WalletService
-	netService     *ss.P2PService
-	dPosService    *ss.DPosService
-	rPCService     *ss.RPCService
-	sqliteService  *ss.SqliteService
-	services       []common.Service
+	//ctx            	*chain.QlcContext
+	ledgerService  		*ss.LedgerService
+	walletService  		*ss.WalletService
+	netService     		*ss.P2PService
+	consensusService	*ss.ConsensusService
+	rPCService     		*ss.RPCService
+	sqliteService  		*ss.SqliteService
+	services       		[]common.Service
 	maxAccountSize = 100
 )
 

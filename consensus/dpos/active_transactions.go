@@ -73,77 +73,73 @@ func (act *ActiveTrx) addToRoots(block *types.StateBlock) bool {
 	}
 }
 
-func (act *ActiveTrx) updatePerformanceConsensusBeginTime(hash types.Hash, el *Election) {
-	if act.dps.cfg.PerformanceEnabled {
+func (act *ActiveTrx) updatePerformanceTime(hash types.Hash, el *Election) {
+	if !act.dps.cfg.PerformanceEnabled {
+		return
+	}
+
+	if el.announcements == 0 {
+		if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
+			t := &types.PerformanceTime{
+				Hash: hash,
+				T0:   p.T0,
+				T1:   p.T1,
+				T2:   time.Now().UnixNano(),
+				T3:   p.T3,
+			}
+
+			act.dps.ledger.AddOrUpdatePerformance(t)
+			if err != nil {
+				act.dps.logger.Info("AddOrUpdatePerformance error T2")
+			}
+		} else {
+			act.dps.logger.Info("get performanceTime error T2")
+		}
+	}
+
+	if el.confirmed {
+		var t *types.PerformanceTime
+		if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
+			if el.announcements == 0 {
+				t = &types.PerformanceTime{
+					Hash: hash,
+					T0:   p.T0,
+					T1:   time.Now().UnixNano(),
+					T2:   p.T2,
+					T3:   time.Now().UnixNano(),
+				}
+			} else {
+				t = &types.PerformanceTime{
+					Hash: hash,
+					T0:   p.T0,
+					T1:   time.Now().UnixNano(),
+					T2:   p.T2,
+					T3:   p.T3,
+				}
+			}
+			err := act.dps.ledger.AddOrUpdatePerformance(t)
+			if err != nil {
+				act.dps.logger.Info("AddOrUpdatePerformance error T1")
+			}
+		} else {
+			act.dps.logger.Info("get performanceTime error T1")
+		}
+	} else {
 		if el.announcements == 0 {
 			if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
 				t := &types.PerformanceTime{
 					Hash: hash,
 					T0:   p.T0,
 					T1:   p.T1,
-					T2:   time.Now().UnixNano(),
-					T3:   p.T3,
+					T2:   p.T2,
+					T3:   time.Now().UnixNano(),
 				}
-
 				act.dps.ledger.AddOrUpdatePerformance(t)
 				if err != nil {
-					act.dps.logger.Info("AddOrUpdatePerformance error T2")
+					act.dps.logger.Info("AddOrUpdatePerformance error T3")
 				}
 			} else {
-				act.dps.logger.Info("get performanceTime error T2")
-			}
-		}
-	}
-}
-
-func (act *ActiveTrx) updatePerformanceConsensusEndTime(hash types.Hash, el *Election) {
-	if el.confirmed {
-		if act.dps.cfg.PerformanceEnabled {
-			var t *types.PerformanceTime
-			if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
-				if el.announcements == 0 {
-					t = &types.PerformanceTime{
-						Hash: hash,
-						T0:   p.T0,
-						T1:   time.Now().UnixNano(),
-						T2:   p.T2,
-						T3:   time.Now().UnixNano(),
-					}
-				} else {
-					t = &types.PerformanceTime{
-						Hash: hash,
-						T0:   p.T0,
-						T1:   time.Now().UnixNano(),
-						T2:   p.T2,
-						T3:   p.T3,
-					}
-				}
-				err := act.dps.ledger.AddOrUpdatePerformance(t)
-				if err != nil {
-					act.dps.logger.Info("AddOrUpdatePerformance error T1")
-				}
-			} else {
-				act.dps.logger.Info("get performanceTime error T1")
-			}
-		}
-	} else {
-		if act.dps.cfg.PerformanceEnabled {
-			if el.announcements == 0 {
-				if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
-					t := &types.PerformanceTime{
-						Hash: hash,
-						T0:   p.T0,
-						T1:   p.T1,
-						T2:   p.T2,
-						T3:   time.Now().UnixNano(),
-					}
-					act.dps.ledger.AddOrUpdatePerformance(t)
-					if err != nil {
-						act.dps.logger.Info("AddOrUpdatePerformance error T3")
-					}
-				} else {
-					act.dps.logger.Info("get performanceTime error T3")
-				}
+				act.dps.logger.Info("get performanceTime error T3")
 			}
 		}
 	}
@@ -155,7 +151,7 @@ func (act *ActiveTrx) announceVotes() {
 
 		act.roots.Range(func(key, value interface{}) bool {
 			el := value.(*Election)
-			if nowTime-el.lastTime < announceInterval {
+			if nowTime - el.lastTime < announceInterval {
 				return true
 			} else {
 				el.lastTime = nowTime
@@ -164,11 +160,10 @@ func (act *ActiveTrx) announceVotes() {
 			block := el.status.winner
 			hash := block.GetHash()
 
-			act.updatePerformanceConsensusBeginTime(hash, el)
+			act.updatePerformanceTime(hash, el)
 
 			if el.confirmed {
 				act.dps.logger.Infof("block [%s] is already confirmed", hash)
-				act.updatePerformanceConsensusEndTime(hash, el)
 				act.dps.eb.Publish(string(common.EventConfirmedBlock), block)
 				act.inactive = append(act.inactive, el.vote.id)
 				act.rollBack(el.status.loser)
@@ -176,7 +171,6 @@ func (act *ActiveTrx) announceVotes() {
 			} else {
 				act.dps.logger.Infof("vote:send confirmReq for block [%s]", hash)
 				act.dps.eb.Publish(string(common.EventBroadcast), common.ConfirmReq, block)
-				act.updatePerformanceConsensusEndTime(hash, el)
 				el.announcements++
 			}
 

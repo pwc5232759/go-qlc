@@ -247,6 +247,8 @@ func (dps *DPoS) ProcessMsg(msgType consensus.MsgType, result process.ProcessRes
 				}
 			}
 		} else if result == process.Progress {
+			dps.acTrx.vote(ack)
+
 			localRepAccount.Range(func(key, value interface{}) bool {
 				address := key.(types.Address)
 				dps.saveOnlineRep(address)
@@ -261,6 +263,8 @@ func (dps *DPoS) ProcessMsg(msgType consensus.MsgType, result process.ProcessRes
 
 				return true
 			})
+		} else if result == process.Old {
+			dps.acTrx.vote(ack)
 		}
 	case consensus.MsgSync:
 		//

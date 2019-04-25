@@ -16,17 +16,28 @@ const (
 	announceInterval = 16
 )
 
+type voteKey [1 + types.HashSize]byte
+
 type ActiveTrx struct {
-	confirmed electionStatus
-	dps       *DPoS
-	roots     *sync.Map
-	inactive  []types.Hash
-	quitCh    chan bool
+	confirmed 	electionStatus
+	dps       	*DPoS
+	roots     	*sync.Map
+	inactive  	[]voteKey
+	quitCh    	chan bool
+	perfCh		chan *PerformanceTime
+}
+
+type PerformanceTime struct {
+	hash 		types.Hash
+	curTime 	int64
+	confirmed 	bool
 }
 
 func NewActiveTrx() *ActiveTrx {
 	return &ActiveTrx{
-		roots: new(sync.Map),
+		roots: 		new(sync.Map),
+		quitCh:		make(chan bool, 1),
+		perfCh:		make(chan *PerformanceTime, 1024000),
 	}
 }
 
@@ -35,15 +46,26 @@ func (act *ActiveTrx) SetDposService(dps *DPoS) {
 }
 
 func (act *ActiveTrx) start() {
-	go act.announceVotes()
+	for {
+		select {
+		case <-act.quitCh:
+			act.dps.logger.Info("act stopped")
+			return
+		case perf := <-act.perfCh:
+			act.updatePerformanceTime(perf.hash, perf.curTime, perf.confirmed)
+		default:
+			act.announceVotes()
+			time.Sleep(1000 * time.Millisecond)
+		}
+	}
 }
 
 func (act *ActiveTrx) stop() {
 	act.quitCh <- true
 }
 
-func (act *ActiveTrx) getVoteKey(block *types.StateBlock) []byte {
-	var key [1 + types.HashSize]byte
+func getVoteKey(block *types.StateBlock) voteKey {
+	var key voteKey
 
 	if block.Type.Equal(types.Open) || block.Type.Equal(types.ContractReward) {
 		key[0] = 1
@@ -53,11 +75,11 @@ func (act *ActiveTrx) getVoteKey(block *types.StateBlock) []byte {
 		copy(key[1:], block.Previous[:])
 	}
 
-	return key[:]
+	return key
 }
 
 func (act *ActiveTrx) addToRoots(block *types.StateBlock) bool {
-	vk := act.getVoteKey(block)
+	vk := getVoteKey(block)
 
 	if _, ok := act.roots.Load(vk); !ok {
 		ele, err := NewElection(act.dps, block)
@@ -73,50 +95,31 @@ func (act *ActiveTrx) addToRoots(block *types.StateBlock) bool {
 	}
 }
 
-func (act *ActiveTrx) updatePerformanceTime(hash types.Hash, el *Election) {
+func (act *ActiveTrx) updatePerfTime(hash types.Hash, curTime int64, confirmed bool) {
 	if !act.dps.cfg.PerformanceEnabled {
 		return
 	}
 
-	if el.announcements == 0 {
+	perf := &PerformanceTime {
+		hash:		hash,
+		curTime:	curTime,
+		confirmed:	confirmed,
+	}
+
+	act.perfCh <- perf
+}
+
+func (act *ActiveTrx) updatePerformanceTime(hash types.Hash, curTime int64, confirmed bool) {
+	if confirmed {
 		if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
-			t := &types.PerformanceTime{
+			t := &types.PerformanceTime {
 				Hash: hash,
 				T0:   p.T0,
-				T1:   p.T1,
-				T2:   time.Now().UnixNano(),
+				T1:   curTime,
+				T2:   p.T2,
 				T3:   p.T3,
 			}
 
-			act.dps.ledger.AddOrUpdatePerformance(t)
-			if err != nil {
-				act.dps.logger.Info("AddOrUpdatePerformance error T2")
-			}
-		} else {
-			act.dps.logger.Info("get performanceTime error T2")
-		}
-	}
-
-	if el.confirmed {
-		var t *types.PerformanceTime
-		if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
-			if el.announcements == 0 {
-				t = &types.PerformanceTime{
-					Hash: hash,
-					T0:   p.T0,
-					T1:   time.Now().UnixNano(),
-					T2:   p.T2,
-					T3:   time.Now().UnixNano(),
-				}
-			} else {
-				t = &types.PerformanceTime{
-					Hash: hash,
-					T0:   p.T0,
-					T1:   time.Now().UnixNano(),
-					T2:   p.T2,
-					T3:   p.T3,
-				}
-			}
 			err := act.dps.ledger.AddOrUpdatePerformance(t)
 			if err != nil {
 				act.dps.logger.Info("AddOrUpdatePerformance error T1")
@@ -125,73 +128,56 @@ func (act *ActiveTrx) updatePerformanceTime(hash types.Hash, el *Election) {
 			act.dps.logger.Info("get performanceTime error T1")
 		}
 	} else {
-		if el.announcements == 0 {
-			if p, err := act.dps.ledger.GetPerformanceTime(hash); p != nil && err == nil {
-				t := &types.PerformanceTime{
-					Hash: hash,
-					T0:   p.T0,
-					T1:   p.T1,
-					T2:   p.T2,
-					T3:   time.Now().UnixNano(),
-				}
-				act.dps.ledger.AddOrUpdatePerformance(t)
-				if err != nil {
-					act.dps.logger.Info("AddOrUpdatePerformance error T3")
-				}
-			} else {
-				act.dps.logger.Info("get performanceTime error T3")
-			}
+		t := &types.PerformanceTime {
+			Hash: hash,
+			T0:   curTime,
+			T1:   0,
+			T2:   0,
+			T3:   0,
+		}
+
+		err := act.dps.ledger.AddOrUpdatePerformance(t)
+		if err != nil {
+			act.dps.logger.Infof("AddOrUpdatePerformance error T0")
 		}
 	}
 }
 
 func (act *ActiveTrx) announceVotes() {
-	for {
-		nowTime := time.Now().Unix()
+	nowTime := time.Now().Unix()
 
-		act.roots.Range(func(key, value interface{}) bool {
-			el := value.(*Election)
-			if nowTime - el.lastTime < announceInterval {
-				return true
-			} else {
-				el.lastTime = nowTime
-			}
-
-			block := el.status.winner
-			hash := block.GetHash()
-
-			act.updatePerformanceTime(hash, el)
-
-			if el.confirmed {
-				act.dps.logger.Infof("block [%s] is already confirmed", hash)
-				act.dps.eb.Publish(string(common.EventConfirmedBlock), block)
-				act.inactive = append(act.inactive, el.vote.id)
-				act.rollBack(el.status.loser)
-				act.addWinner2Ledger(block)
-			} else {
-				act.dps.logger.Infof("vote:send confirmReq for block [%s]", hash)
-				act.dps.eb.Publish(string(common.EventBroadcast), common.ConfirmReq, block)
-				el.announcements++
-			}
-
-			if el.announcements == announcementMax {
-				if _, ok := act.roots.Load(value); !ok {
-					act.inactive = append(act.inactive, el.vote.id)
-				}
-			}
-
+	act.roots.Range(func(key, value interface{}) bool {
+		el := value.(*Election)
+		if nowTime - el.lastTime < announceInterval {
 			return true
-		})
+		} else {
+			el.lastTime = nowTime
+		}
 
-		for _, value := range act.inactive {
-			if _, ok := act.roots.Load(value); ok {
-				act.roots.Delete(value)
+		block := el.status.winner
+		hash := block.GetHash()
+
+		if !el.confirmed {
+			act.dps.logger.Infof("vote:send confirmReq for block [%s]", hash)
+			act.dps.eb.Publish(string(common.EventBroadcast), common.ConfirmReq, block)
+			el.announcements++
+		}
+
+		if el.announcements == announcementMax {
+			if _, ok := act.roots.Load(el.vote.id); !ok {
+				act.inactive = append(act.inactive, el.vote.id)
 			}
 		}
-		act.inactive = act.inactive[:0:0]
 
-		time.Sleep(1 * time.Second)
+		return true
+	})
+
+	for _, value := range act.inactive {
+		if _, ok := act.roots.Load(value); ok {
+			act.roots.Delete(value)
+		}
 	}
+	act.inactive = act.inactive[:0:0]
 }
 
 func (act *ActiveTrx) addWinner2Ledger(block *types.StateBlock) {
@@ -228,7 +214,7 @@ func (act *ActiveTrx) rollBack(blocks []*types.StateBlock) {
 }
 
 func (act *ActiveTrx) vote(va *protos.ConfirmAckBlock) {
-	vk := act.getVoteKey(va.Blk)
+	vk := getVoteKey(va.Blk)
 
 	if v, ok := act.roots.Load(vk); ok {
 		v.(*Election).voteAction(va)

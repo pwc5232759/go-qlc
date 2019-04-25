@@ -19,6 +19,7 @@ const (
 	MsgConfirmReq
 	MsgConfirmAck
 	MsgSync
+	MsgGenerateBlock
 )
 
 type BlockSource struct {

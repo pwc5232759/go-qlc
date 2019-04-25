@@ -59,6 +59,7 @@ func NewDPoS(cfg *config.Config, accounts []*types.Account, eb event.EventBus) *
 		lv:             process.NewLedgerVerifier(l),
 		uncheckedCache: gcache.New(msgCacheSize).LRU().Expiration(uncheckedTimeout).Build(),
 		voteCache:      gcache.New(msgCacheSize).LRU().Expiration(voteCacheTimeout).Build(),
+		quitCh:			make(chan bool, 1),
 	}
 
 	dps.acTrx.SetDposService(dps)
@@ -103,8 +104,8 @@ func (dps *DPoS) Start() {
 
 func (dps *DPoS) Stop() {
 	dps.logger.Info("DPOS service stopped!")
-	dps.quitCh <- true
 	dps.acTrx.stop()
+	dps.quitCh <- true
 }
 
 func (dps *DPoS) enqueueUnchecked(hash types.Hash, depHash types.Hash, bs *consensus.BlockSource) {
@@ -184,9 +185,11 @@ func (dps *DPoS) dequeueUnchecked(hash types.Hash) {
 
 func (dps *DPoS) ProcessMsg(msgType consensus.MsgType, result process.ProcessResult, bs *consensus.BlockSource, p interface{}) {
 	dps.ProcessResult(result, bs)
+	hash := bs.Block.GetHash()
 
 	switch msgType {
 	case consensus.MsgPublishReq:
+		dps.logger.Infof("dps recv publishReq block[%s]", hash)
 		if result == process.Progress {
 			localRepAccount.Range(func(key, value interface{}) bool {
 				address := key.(types.Address)
@@ -204,6 +207,7 @@ func (dps *DPoS) ProcessMsg(msgType consensus.MsgType, result process.ProcessRes
 			})
 		}
 	case consensus.MsgConfirmReq:
+		dps.logger.Infof("dps recv confirmReq block[%s]", hash)
 		localRepAccount.Range(func(key, value interface{}) bool {
 			address := key.(types.Address)
 			dps.saveOnlineRep(address)
@@ -223,13 +227,14 @@ func (dps *DPoS) ProcessMsg(msgType consensus.MsgType, result process.ProcessRes
 			return true
 		})
 	case consensus.MsgConfirmAck:
+		dps.logger.Infof("dps recv confirmAck block[%s]", hash)
 		ack := p.(*protos.ConfirmAckBlock)
 		dps.saveOnlineRep(ack.Account)
 
 		//cache the ack messages
 		if result == process.GapPrevious || result == process.GapSource {
-			if dps.voteCache.Has(ack.Blk.GetHash()) {
-				v, err := dps.voteCache.Get(ack.Blk.GetHash())
+			if dps.voteCache.Has(hash) {
+				v, err := dps.voteCache.Get(hash)
 				if err != nil {
 					dps.logger.Error("get vote cache err")
 					return
@@ -240,7 +245,7 @@ func (dps *DPoS) ProcessMsg(msgType consensus.MsgType, result process.ProcessRes
 			} else {
 				vc := new(sync.Map)
 				vc.Store(ack.Account, ack)
-				err := dps.voteCache.Set(ack.Blk.GetHash(), vc)
+				err := dps.voteCache.Set(hash, vc)
 				if err != nil {
 					dps.logger.Error("set vote cache err")
 					return
@@ -268,6 +273,22 @@ func (dps *DPoS) ProcessMsg(msgType consensus.MsgType, result process.ProcessRes
 		}
 	case consensus.MsgSync:
 		//
+	case consensus.MsgGenerateBlock:
+		dps.acTrx.updatePerfTime(hash, time.Now().UnixNano(), false)
+
+		localRepAccount.Range(func(key, value interface{}) bool {
+			address := key.(types.Address)
+			dps.saveOnlineRep(address)
+
+			va, err := dps.voteGenerate(bs.Block, address, value.(*types.Account))
+			if err != nil {
+				return true
+			}
+
+			dps.acTrx.vote(va)
+			dps.eb.Publish(string(common.EventBroadcast), common.ConfirmAck, va)
+			return true
+		})
 	default:
 		//
 	}
@@ -280,9 +301,9 @@ func (dps *DPoS) ProcessResult(result process.ProcessResult, bs *consensus.Block
 	switch result {
 	case process.Progress:
 		if bs.BlockFrom == types.Synchronized {
-			dps.logger.Debugf("Block %s from sync,no need consensus", hash)
+			dps.logger.Infof("Block %s from sync,no need consensus", hash)
 		} else if bs.BlockFrom == types.UnSynchronized {
-			dps.logger.Debugf("Block %s basic info is correct,begin add it to roots", hash)
+			dps.logger.Infof("Block %s basic info is correct,begin add it to roots", hash)
 			dps.acTrx.addToRoots(blk)
 		} else {
 			dps.logger.Errorf("Block %s UnKnow from", hash)
@@ -371,6 +392,7 @@ func (dps *DPoS) refreshAccount() {
 		return true
 	})
 
+	dps.logger.Infof("there is %d reps", count)
 	if count > 1 {
 		dps.logger.Error("it is very dangerous to run two or more representatives on one node")
 	}

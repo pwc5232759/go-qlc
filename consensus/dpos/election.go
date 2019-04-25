@@ -32,7 +32,7 @@ func NewElection(dps *DPoS, block *types.StateBlock) (*Election, error) {
 	vt := NewVotes(block)
 	status := electionStatus{block, types.ZeroBalance, nil}
 
-	return &Election{
+	return &Election {
 		vote:          vt,
 		status:        status,
 		confirmed:     false,
@@ -45,14 +45,17 @@ func NewElection(dps *DPoS, block *types.StateBlock) (*Election, error) {
 func (el *Election) voteAction(va *protos.ConfirmAckBlock) {
 	valid := consensus.IsAckSignValidate(va)
 	if !valid {
+		el.dps.logger.Errorf("ack sign err %s", va.Blk.GetHash())
 		return
 	}
 
 	result := el.vote.voteStatus(va)
 	if result == confirm {
+		el.dps.logger.Infof("recv same ack %s", va.Blk.GetHash())
 		return
 	}
 
+	el.dps.logger.Infof("vote balance %d", va.Blk.Balance)
 	el.haveQuorum()
 }
 
@@ -85,6 +88,11 @@ func (el *Election) haveQuorum() {
 	confirmedHash := blk.GetHash()
 	if balance.Compare(b) == types.BalanceCompBigger {
 		el.dps.logger.Infof("hash:%s block has confirmed,total vote is [%s]", confirmedHash, balance.String())
+
+		el.dps.eb.Publish(string(common.EventConfirmedBlock), blk)
+		el.dps.acTrx.roots.Delete(el.vote.id)
+		el.dps.acTrx.updatePerfTime(blk.GetHash(), time.Now().UnixNano(), true)
+
 		if el.status.winner.GetHash().String() != confirmedHash.String() {
 			el.dps.logger.Infof("hash:%s ...is loser", el.status.winner.GetHash().String())
 			el.status.loser = append(el.status.loser, el.status.winner)
@@ -99,6 +107,9 @@ func (el *Election) haveQuorum() {
 				el.status.loser = append(el.status.loser, value.block)
 			}
 		}
+
+		el.dps.acTrx.rollBack(el.status.loser)
+		el.dps.acTrx.addWinner2Ledger(blk)
 	} else {
 		el.dps.logger.Infof("wait for enough rep vote for block [%s],current vote is [%s]", confirmedHash, balance.String())
 	}

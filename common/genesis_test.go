@@ -19,7 +19,7 @@ import (
 )
 
 func TestGenesisBlock(t *testing.T) {
-	h, _ := types.NewHash("7201b4c283b7a32e88ec4c5867198da574de1718eb18c7f95ee8ef733c0b5609")
+	h, _ := types.NewHash("e7bc60ccdd0175d07797b746a383ed9e3185373748fe77a2493636abcb3bf90f")
 	genesisBlock := GenesisBlock()
 	h2 := genesisBlock.GetHash()
 	if h2 != h {
@@ -27,7 +27,7 @@ func TestGenesisBlock(t *testing.T) {
 		t.Fatal("invalid genesis block", h2.String(), h.String())
 	}
 
-	h3, _ := types.NewHash("c0d330096ec4ab6ccf5481e06cc54e74b14f534e99e38df486f47d1123cbd1ae")
+	h3, _ := types.NewHash("467cae1b0aba47902945c14aec79f0c5be31d543439a0ed80da9099cb8e4057b")
 	h4 := genesisMintageBlock.GetHash()
 	if h3 != h4 {
 		t.Log(util.ToIndentString(genesisMintageBlock))
@@ -36,7 +36,7 @@ func TestGenesisBlock(t *testing.T) {
 }
 
 func TestGasBlock1(t *testing.T) {
-	h, _ := types.NewHash("b9e2ea2e4310c38ed82ff492cb83229b4361d89f9c47ebbd6653ddec8a07ebe1")
+	h, _ := types.NewHash("62be0ce52d9fa4ae07b1fcf69447f952610536ab4697ebf1859d67bfe658b285")
 	gasBlock := GasBlock()
 	h2 := gasBlock.GetHash()
 	if h2 != h {
@@ -44,7 +44,7 @@ func TestGasBlock1(t *testing.T) {
 		t.Fatal("invalid gas block", h2.String(), h.String())
 	}
 
-	h3, _ := types.NewHash("bdac41b3ff7ac35aee3028d60eabeb9578ea6f7bd148d611133a3b26dfa6a9be")
+	h3, _ := types.NewHash("8492fecd1b25467cfbe3eb369b1b65fbc3c206276ab6a3f19e7ef5897a38d393")
 	gasMintageBlock := GasMintageBlock()
 	h4 := gasMintageBlock.GetHash()
 	if h3 != h4 {
@@ -55,7 +55,7 @@ func TestGasBlock1(t *testing.T) {
 
 func TestIsGenesisToken(t *testing.T) {
 	h1, _ := types.NewHash("327531148b1a6302632aa7ad6eb369437d8269a08a55b344bd06b514e4e6ae97")
-	h2, _ := types.NewHash("45dd217cd9ff89f7b64ceda4886cc68dde9dfa47a8a422d165e2ce6f9a834fad")
+	h2, _ := types.NewHash("18ceb6779a31caa2948323ef1a57ec59ee5a182939761ae101f5c4e6163efa1a")
 	b1 := IsGenesisToken(h1)
 	if b1 {
 		t.Fatal("h1 should not be Genesis Token")

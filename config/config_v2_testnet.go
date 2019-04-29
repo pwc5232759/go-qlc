@@ -37,7 +37,7 @@ func DefaultConfigV2(dir string) (*ConfigV2, error) {
 		},
 		P2P: &P2PConfigV2{
 			BootNodes: []string{
-				"/ip4/218.17.39.34/tcp/39734/ipfs/QmVYKUm5YPAks18S1K7VenvqsEssWZPh38cSshbdFUhWTC",
+				"/ip4/192.169.7.42/tcp/39734/ipfs/QmVYKUm5YPAks18S1K7VenvqsEssWZPh38cSshbdFUhWTC",
 			},
 			Listen:       "/ip4/0.0.0.0/tcp/39734",
 			SyncInterval: 120,

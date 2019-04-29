@@ -43,20 +43,19 @@ func DefaultConfigV1(dir string) (*ConfigV1, error) {
 		RPC: &RPCConfigV1{
 			Enable:           true,
 			HTTPEnabled:      true,
-			HTTPEndpoint:     "tcp4://0.0.0.0:19735",
+			HTTPEndpoint:     "tcp4://0.0.0.0:39735",
 			HTTPCors:         []string{"*"},
 			HttpVirtualHosts: []string{},
 			WSEnabled:        true,
-			WSEndpoint:       "tcp4://0.0.0.0:19736",
+			WSEndpoint:       "tcp4://0.0.0.0:39736",
 			IPCEnabled:       true,
 			IPCEndpoint:      defaultIPCEndpoint(),
 		},
 		P2P: &P2PConfigV1{
 			BootNodes: []string{
-				"/ip4/47.103.40.20/tcp/19734/ipfs/QmdFSukPUMF3t1JxjvTo14SEEb5JV9JBT6PukGRo6A2g4f",
-				"/ip4/47.112.112.138/tcp/19734/ipfs/QmW9ocg4fRjckCMQvRNYGyKxQd6GiutAY4HBRxMrGrZRfc",
+				"/ip4/218.17.39.34/tcp/39734/ipfs/QmVYKUm5YPAks18S1K7VenvqsEssWZPh38cSshbdFUhWTC",
 			},
-			Listen:       "/ip4/0.0.0.0/tcp/19734",
+			Listen:       "/ip4/0.0.0.0/tcp/39734",
 			SyncInterval: 120,
 		},
 		Discovery: &DiscoveryConfigV1{

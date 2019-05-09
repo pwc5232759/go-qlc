@@ -141,6 +141,11 @@ func (m MigrationV4ToV5) Migrate(txn db.StoreTxn) error {
 					return err
 				}
 				bas[address] = amount
+			} else {
+				be := new(types.Benefit)
+				if _, err := be.UnmarshalMsg(val); err != nil {
+					return err
+				}
 			}
 			return nil
 		})
